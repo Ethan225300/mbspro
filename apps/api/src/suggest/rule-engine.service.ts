@@ -56,7 +56,39 @@ export class RuleEngineService {
   private loadNormalizedRules(): void {
     try {
       const rulesPath = process.env.MBS_RULES_JSON || path.resolve(__dirname, 'mbs_rules.normalized.json');
-      if (!fs.existsSync(rulesPath)) return;
+      
+      if (!fs.existsSync(rulesPath)) {
+        // Try alternative paths
+        const altPaths = [
+          path.resolve(process.cwd(), 'dist/suggest/mbs_rules.normalized.json'),
+          path.resolve(process.cwd(), 'apps/api/dist/suggest/mbs_rules.normalized.json'),
+          path.resolve(__dirname, '../../../suggest/mbs_rules.normalized.json'),
+          path.resolve(__dirname, '../../../../suggest/mbs_rules.normalized.json'),
+        ];
+        
+        for (const altPath of altPaths) {
+          if (fs.existsSync(altPath)) {
+            // Load from alternative path
+            try {
+              const raw = fs.readFileSync(altPath, 'utf8');
+              const arr = JSON.parse(raw);
+              if (Array.isArray(arr)) {
+                const m = new Map<string, any>();
+                for (const it of arr) {
+                  const code = String((it && it.code) || '');
+                  if (code) m.set(code, it);
+                }
+                this.rulesByCode = m;
+                return;
+              }
+            } catch (altError) {
+              // Continue to next path
+            }
+          }
+        }
+        return;
+      }
+      
       const raw = fs.readFileSync(rulesPath, 'utf8');
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
