@@ -516,13 +516,13 @@ export class RagVerifyService {
     if (hasHardFail) {
       const failChecks = triChecks.filter((c) => c.result === 'FAIL');
       const failDetails = failChecks.map((c) => `- ${c.name}: ${c.details}`).join('\n');
-      rationale_markdown = `**${rule.code}** ❌ Failed:\n${failDetails}`;
+      rationale_markdown = `❌ Failed:\n${failDetails}`;
     } else if (hasSoft) {
       const softChecks = triChecks.filter((c) => c.result === 'SOFT');
       const softDetails = softChecks.map((c) => `- ${c.name}: ${c.details || 'uncertain'}`).join('\n');
-      rationale_markdown = `**${rule.code}** ⚠️ Uncertain:\n${softDetails}`;
+      rationale_markdown = `⚠️ Uncertain:\n${softDetails}`;
     } else {
-      rationale_markdown = `**${rule.code}** ✅ Passed: all requirements satisfied.`;
+      rationale_markdown = `✅ Passed: all requirements satisfied.`;
     }
     
     return { 

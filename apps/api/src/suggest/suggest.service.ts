@@ -30,36 +30,52 @@ export class SuggestService {
     const started = Date.now();
     const note = request.note || "";
     const topN = request.topN && request.topN > 0 ? request.topN : 5;
+    const mode = (request as any).mode === 'deep' ? 'deep' : 'quick';
 
     try {
       const signalsInternal = this.signalExtractor.extract(note);
       const topK = Math.max(30, topN * 10);
 
-      // RAG-only retrieval
+      // Retrieval stage: quick uses standard queryRag, deep uses agenticQueryRag
       let rows: any[] = [];
       try {
-        const rag = await this.rag.queryRag(note, Math.min(topN + 3, 15));
-        if (rag && Array.isArray((rag as any).results)) {
-          rows = (rag as any).results.map((r: any) => ({
-            code:
-              r.itemNum ||
-              (Array.isArray(r.itemNums) ? r.itemNums[0] || "" : ""),
-            title: r.title || "",
-            description: r.description || "",
-            match_reason: r.match_reason || "",
-            fee: r.fee ? parseFloat(String(r.fee).replace(/[^0-9.]/g, "")) : 0,
+        if (mode === 'deep') {
+          const result = await this.rag.agenticQueryRag(note, Math.min(topN + 3, 15));
+          const items = Array.isArray((result as any)?.items) ? (result as any).items : [];
+          rows = items.map((it: any) => ({
+            code: String(it.code || it.itemNum || ''),
+            title: String(it.display || it.title || ''),
+            description: String((it as any).description || ''),
+            match_reason: String((it.verify?.rationale_markdown) || ''),
+            fee: it.fee ? parseFloat(String(it.fee).replace(/[^0-9.]/g, '')) : 0,
             flags: {},
             time_threshold: undefined,
-            bm25:
-              typeof r.match_score === "number"
-                ? r.match_score > 1 && r.match_score <= 100
-                  ? Math.max(0, Math.min(1, r.match_score / 100))
-                  : Math.max(0, Math.min(1, r.match_score))
-                : 0,
+            bm25: typeof it.score === 'number' ? Math.max(0, Math.min(1, it.score)) : 0,
           }));
+        } else {
+          const rag = await this.rag.queryRag(note, Math.min(topN + 3, 15));
+          if (rag && Array.isArray((rag as any).results)) {
+            rows = (rag as any).results.map((r: any) => ({
+              code:
+                r.itemNum ||
+                (Array.isArray(r.itemNums) ? r.itemNums[0] || "" : ""),
+              title: r.title || "",
+              description: r.description || "",
+              match_reason: r.match_reason || "",
+              fee: r.fee ? parseFloat(String(r.fee).replace(/[^0-9.]/g, "")) : 0,
+              flags: {},
+              time_threshold: undefined,
+              bm25:
+                typeof r.match_score === "number"
+                  ? r.match_score > 1 && r.match_score <= 100
+                    ? Math.max(0, Math.min(1, r.match_score / 100))
+                    : Math.max(0, Math.min(1, r.match_score))
+                  : 0,
+            }));
+          }
         }
       } catch (e) {
-        this.logger.warn(`RAG query failed: ${String(e)}`);
+        this.logger.warn(`RAG ${mode} query failed: ${String(e)}`);
       }
       // Lexical-only retrieval for fusion with RAG
       const lexMap = new Map<string, number>();

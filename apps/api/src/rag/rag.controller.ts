@@ -41,7 +41,14 @@ export class RagController {
     }
     const top = Number(body?.top ?? 5);
     const result = await this.rag.agenticQueryRag(note, top);
-    return result;
+    const results = (result.items || []).map((item: any) => ({
+      itemNum: String(item.code ?? ''),
+      title: String(item.display ?? ''),
+      match_reason: String(item.verify?.rationale_markdown ?? ''),
+      match_score: item.score ?? null,
+      fee: item.fee ?? null,
+    }));
+    return { results };
   }
 
   @Post('clear')

@@ -44,6 +44,7 @@ interface SuggestCandidate {
   rule_results?: any[];
   compliance?: "green" | "amber" | "red";
   confidence?: number;
+  rationale_markdown?: string;
 }
 
 interface SuggestResponse {
@@ -85,6 +86,7 @@ export default function SuggestionsPage() {
   const [selectionBlocked, setSelectionBlocked] = useState(false);
   const [selectionWarnings, setSelectionWarnings] = useState<string[]>([]);
   const [hasClearedNotes, setHasClearedNotes] = useState(false);
+  const [suggestMode, setSuggestMode] = useState<'quick'|'deep'>('quick');
   
   // Use shared patient selection store
   const { selectedPatient, setSelectedPatient } = usePatientSelection();
@@ -329,24 +331,36 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
         requestBody.hoursBucket = selectedPatient.hours_bucket;
       }
 
-      const response = await fetch(`${apiBase}/api/suggest`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        throw new Error(`API responded with status: ${response.status}`);
+      if (suggestMode === 'deep') {
+        const response = await fetch(`${apiBase}/api/suggest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...requestBody, mode: 'deep' }),
+        });
+        if (!response.ok) throw new Error(`API responded with status: ${response.status}`);
+        const data: SuggestResponse = await response.json();
+        setSuggestions((data.candidates as any) || []);
+        try { (window as any).__suggestVisible = (data.candidates || []).map((c:any)=>String(c.code)); } catch {}
+        setCandidates((data.candidates as any) || []);
+        setShowSuggestions(true);
+      } else {
+        const response = await fetch(`${apiBase}/api/suggest`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ...requestBody, mode: 'quick' }),
+        });
+        if (!response.ok) {
+          throw new Error(`API responded with status: ${response.status}`);
+        }
+        const data: SuggestResponse = await response.json();
+        setSuggestions(data.candidates || []);
+        // expose visible suggestion codes globally for SwapPanel filtering
+        try { (window as any).__suggestVisible = (data.candidates || []).map((c:any)=>String(c.code)); } catch {}
+        setCandidates((data.candidates as any) || []);
+        setShowSuggestions(true);
       }
-
-      const data: SuggestResponse = await response.json();
-      setSuggestions(data.candidates || []);
-      // expose visible suggestion codes globally for SwapPanel filtering
-      try { (window as any).__suggestVisible = (data.candidates || []).map((c:any)=>String(c.code)); } catch {}
-      setCandidates((data.candidates as any) || []);
-      setShowSuggestions(true);
     } catch (err: any) {
       console.error("Error getting suggestions:", err);
       setError(err.message || "Failed to fetch suggestions");
@@ -455,40 +469,50 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
                   </span>
                 </div>
 
-                <button
-                  onClick={handleGetSuggestions}
-                  disabled={isLoading}
-                  className="btn-primary flex items-center disabled:opacity-50"
-                >
-                  <SparklesIcon className="mr-2 h-5 w-5" />
-                  {isLoading ? (
-                    <div className="flex items-center">
-                      <svg
-                        className="animate-spin h-4 w-4 mr-2"
-                        xmlns="http://www.w3.org/2000/svg"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                      >
-                        <circle
-                          className="opacity-25"
-                          cx="12"
-                          cy="12"
-                          r="10"
-                          stroke="currentColor"
-                          strokeWidth="4"
-                        ></circle>
-                        <path
-                          className="opacity-75"
-                          fill="currentColor"
-                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                        ></path>
-                      </svg>
-                      Analyzing...
-                    </div>
-                  ) : (
-                    "Get AI Suggestions"
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={suggestMode}
+                    onChange={(e) => setSuggestMode(e.target.value as any)}
+                    className="px-2 py-2 border border-gray-300 rounded-md text-sm"
+                  >
+                    <option value="quick">Quick</option>
+                    <option value="deep">Deep</option>
+                  </select>
+                  <button
+                    onClick={handleGetSuggestions}
+                    disabled={isLoading}
+                    className="btn-primary flex items-center disabled:opacity-50"
+                  >
+                    <SparklesIcon className="mr-2 h-5 w-5" />
+                    {isLoading ? (
+                      <div className="flex items-center">
+                        <svg
+                          className="animate-spin h-4 w-4 mr-2"
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                          ></circle>
+                          <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          ></path>
+                        </svg>
+                        Analyzing...
+                      </div>
+                    ) : (
+                      suggestMode === 'deep' ? 'Get Deep Suggestions' : 'Get AI Suggestions'
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -573,6 +597,20 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
                                   return issues.length > 0 ? String(issues[0].reason || issues[0].id) : 'All checks passed'
                                 })()}
                               </span>
+                            </div>
+                          )}
+
+                          {/* Deep: rationale markdown */}
+                          {suggestion.rationale_markdown && (
+                            <div className="mt-4 p-3 rounded-md bg-gray-50 border-l-4 border-gray-300">
+                              <div className="text-sm text-gray-800 leading-6 whitespace-pre-wrap">{suggestion.rationale_markdown}</div>
+                            </div>
+                          )}
+
+                          {/* Unified short explanation from /api/suggest */}
+                          {!suggestion.rationale_markdown && suggestion.short_explain && (
+                            <div className="mt-4 p-3 rounded-md bg-blue-50 border-l-4 border-blue-300">
+                              <div className="text-sm text-blue-900 leading-6 whitespace-pre-wrap">{suggestion.short_explain}</div>
                             </div>
                           )}
 
