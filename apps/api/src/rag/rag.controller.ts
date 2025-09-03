@@ -44,6 +44,29 @@ export class RagController {
     return result;
   }
 
+  @Post('clear')
+  @HttpCode(HttpStatus.OK)
+  async clear(@Body() body: { token?: string }) {
+    const token = (body && (body as any).token) || undefined;
+    if (process.env.INGEST_SECRET && token !== process.env.INGEST_SECRET) {
+      return { ok: false, error: 'Forbidden' };
+    }
+    const result = await this.rag.clearVectorDatabase();
+    return { ok: true, ...result };
+  }
+
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(@Body() body: { filename?: string; token?: string }) {
+    const token = (body && (body as any).token) || undefined;
+    if (process.env.INGEST_SECRET && token !== process.env.INGEST_SECRET) {
+      return { ok: false, error: 'Forbidden' };
+    }
+    const filename = body?.filename || 'MBS-XML-20250701-Version-3.durations.json';
+    const result = await this.rag.refreshVectorDatabase(filename);
+    return { ok: true, ...result };
+  }
+
   @Get('status')
   @HttpCode(HttpStatus.OK)
   status() {

@@ -152,6 +152,7 @@ export class RagRuleParserService {
       : this.parseIntervalFromDesc(desc);
     return {
       code,
+      group: meta?.group || meta?.Group || null,
       time_window: interval,
       age_range: this.parseAgeRange(desc),
       setting_allowed: this.parseSetting(desc),

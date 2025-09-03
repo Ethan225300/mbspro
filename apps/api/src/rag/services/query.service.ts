@@ -85,6 +85,8 @@ export class RagQueryService {
         duration_max_minutes: meta.duration_max_minutes ?? undefined,
         duration_min_inclusive: meta.duration_min_inclusive ?? true,
         duration_max_inclusive: meta.duration_max_inclusive ?? false,
+        group: meta.group ?? meta.Group ?? undefined,
+        subgroup: meta.subgroup ?? meta.Subgroup ?? undefined,
       };
       if (!metaByItemNum.has(code)) metaByItemNum.set(code, normalized);
     }

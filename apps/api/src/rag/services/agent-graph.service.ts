@@ -69,7 +69,7 @@ export class AgentGraphService {
       if (tri.report.passes) {
         if (tri.soft) softCodes.push(code);
         passedCodes.push(code);
-        verified.push({ code, display, fee, score: r.match_score ?? null, verify: tri.report });
+        verified.push({ code, display, fee, score: r.match_score ?? null, verify: tri.report, group: r.meta?.group || r.meta?.Group || null });
       } else {
         failedCodes.push(code);
       }
@@ -149,7 +149,7 @@ export class AgentGraphService {
           const parser = new RagRuleParserService();
           const rule = parser.buildItemRuleFromDesc(code, desc, r.meta ?? {});
           const tri = this.verify.verifyOneTri(s.facts, rule);
-          this.verify.logItemDetails({ code, verify: tri.report } as any);
+          this.verify.logItemDetails({ code, verify: tri.report, group: r.meta?.group || r.meta?.Group || null } as any);
         }
         const softCount = (vetted.softCodes ?? []).length;
         this.verify.logBatchSummary(allResults, currentPass, softCount);

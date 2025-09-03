@@ -11,13 +11,37 @@ export class RagFactsService {
     const t = text.toLowerCase();
     const facts: Partial<NoteFacts> = { keywords: [] } as any;
 
-    // Extract duration
+    // Extract duration with improved exact time detection
+    const exactTime = t.match(/(?:exactly|precisely|exact)\s+(\d{1,3})\s*min(?:ute)?s?/);
+    const standaloneTime = t.match(/\b(\d{1,3})\s*min(?:ute)?s?\b/);
+    const rangeTime = t.match(/(\d{1,3})\s*[-–—]\s*(\d{1,3})\s*min(?:ute)?s?/);
     const a = t.match(/at\s+least\s+(\d{1,3})\s*min(?:ute)?s?\s+and\s+less\s+than\s+(\d{1,3})/);
     const b = t.match(/(?:≥|>=|at\s+least|not\s+less\s+than)\s*(\d{1,3})\s*min/);
     const c = t.match(/(?:more\s+than|>\s*)\s*(\d{1,3})\s*min/);
     const d = t.match(/(?:<|less\s+than)\s*(\d{1,3})\s*min/);
     const e = t.match(/(\d{1,3})\s*\+?\s*min/);
-    if (a) {
+    
+    if (exactTime) {
+      // Exactly X minutes - set both min and max to X
+      const n = +exactTime[1];
+      (facts as any).duration_min = n;
+      (facts as any).duration_max = n;
+      (facts as any).duration_min_inclusive = true;
+      (facts as any).duration_max_inclusive = true;
+    } else if (standaloneTime && !t.includes('at least') && !t.includes('more than') && !t.includes('less than') && !t.includes('≥') && !t.includes('>=') && !t.includes('>')) {
+      // Standalone X minutes without modifiers - treat as exact time
+      const n = +standaloneTime[1];
+      (facts as any).duration_min = n;
+      (facts as any).duration_max = n;
+      (facts as any).duration_min_inclusive = true;
+      (facts as any).duration_max_inclusive = true;
+    } else if (rangeTime) {
+      // X-Y minutes range
+      (facts as any).duration_min = +rangeTime[1];
+      (facts as any).duration_max = +rangeTime[2];
+      (facts as any).duration_min_inclusive = true;
+      (facts as any).duration_max_inclusive = true;
+    } else if (a) {
       (facts as any).duration_min = +a[1];
       (facts as any).duration_max = +a[2];
       (facts as any).duration_min_inclusive = true;
@@ -50,7 +74,7 @@ export class RagFactsService {
       (facts as any).age = +ageMatch[1];
     } else {
       // Try other age patterns
-      const ageMatch2 = t.match(/(\d{1,3})\s+(?:years?\s+old|yrs?\s+old|yo|y\.?o\.?)/);
+      const ageMatch2 = t.match(/(\d{1,3})\s*(?:years?\s*old|yrs?\s*old|yo|y\.?o\.?)/);
       if (ageMatch2) {
         (facts as any).age = +ageMatch2[1];
       } else {
@@ -62,9 +86,15 @@ export class RagFactsService {
       }
     }
 
-    // Extract modality
-    if (/\bvideo|telehealth\b/.test(t)) (facts as any).modality = 'video';
-    else if (/\bphone|telephone\b/.test(t)) (facts as any).modality = 'phone';
+    // Extract modality with improved detection
+    if (/\b(?:video|telehealth|zoom|virtual|skype|webex|teams)\b/.test(t)) {
+      (facts as any).modality = 'video';
+    } else if (/\b(?:phone|telephone|call)\b/.test(t)) {
+      (facts as any).modality = 'phone';
+    } else {
+      // Default to in_person if no telehealth keywords found
+      (facts as any).modality = 'in_person';
+    }
 
     // Extract setting
     if (/\bhospital|inpatient\b/.test(t)) (facts as any).setting = 'hospital';
@@ -78,9 +108,23 @@ export class RagFactsService {
     if (/\breview\b/.test(t)) (facts as any).first_or_review = 'review';
     if (/\breferral\b/.test(t)) (facts as any).referral_present = true;
 
-    // Extract specialty
-    if (/\bsexual health medicine specialist\b/.test(t)) (facts as any).specialty = 'sexual_health_specialist';
-    else if (/\bgeneral practitioner\b|\bgp\b/.test(t)) (facts as any).specialty = 'gp';
+    // Extract GP, Specialist and Emergency context
+    // Priority: Specialist > GP (because specialist is more specific)
+    if (/\b(?:specialist|consultant|surgeon|anaesthetist|cardiologist|dermatologist|endocrinologist|gastroenterologist|neurologist|oncologist|orthopaedic|psychiatrist|radiologist|urologist|orthopedic|gynaecologist|obstetrician|paediatrician|geriatrician|rheumatologist|nephrologist|haematologist|pulmonologist)\b/.test(t)) {
+      (facts as any).is_gp = false;
+      (facts as any).is_specialist = true;
+    } else if (/\b(?:general practitioner|gp|family doctor|primary care)\b/.test(t)) {
+      (facts as any).is_gp = true;
+      (facts as any).is_specialist = false;
+    }
+    // Note: "gp referral" is about referral relationship, not doctor identity
+    // So we don't set is_gp=true just because of "gp referral"
+    
+    if (/\b(?:emergency|ed|emergency department|emergency room|er|urgent care|acute care|trauma|resuscitation|ambulance|paramedic)\b/.test(t)) {
+      (facts as any).is_emergency = true;
+    } else if (/\b(?:routine|elective|scheduled|appointment|clinic|consultation)\b/.test(t)) {
+      (facts as any).is_emergency = false;
+    }
 
     // Extract keywords for flag checking
     const keywords: string[] = [];
@@ -133,7 +177,10 @@ export class RagFactsService {
         referral_present: seed.referral_present ?? null,
         specialty: seed.specialty ?? null,
         age: (seed as any).age ?? null,
-        keywords: seed.keywords ?? []
+        keywords: seed.keywords ?? [],
+        is_gp: (seed as any).is_gp ?? null,
+        is_emergency: (seed as any).is_emergency ?? null,
+        is_specialist: (seed as any).is_specialist ?? null
       } as NoteFacts;
       this.logger.log(`[AgenticRag][RagFactsService] final facts: ${JSON.stringify(facts)}`);
       return facts;
@@ -155,7 +202,10 @@ export class RagFactsService {
       "referral_present":{"type":["boolean","null"]},
       "specialty":{"type":["string","null"]},
       "age":{"type":["integer","null"]},
-      "keywords":{"type":"array","items":{"type":"string"}}
+      "keywords":{"type":"array","items":{"type":"string"}},
+      "is_gp":{"type":["boolean","null"]},
+      "is_emergency":{"type":["boolean","null"]},
+      "is_specialist":{"type":["boolean","null"]}
     },
     "required":["duration_min","modality","setting","after_hours","keywords"]
   }`;
@@ -176,7 +226,10 @@ export class RagFactsService {
         referral_present: json.referral_present ?? seed.referral_present ?? null,
         specialty: json.specialty ?? seed.specialty ?? null,
         age: json.age ?? (seed as any).age ?? null,
-        keywords: Array.isArray(json.keywords) ? json.keywords : (seed.keywords ?? [])
+        keywords: Array.isArray(json.keywords) ? json.keywords : (seed.keywords ?? []),
+        is_gp: json.is_gp ?? (seed as any).is_gp ?? null,
+        is_emergency: json.is_emergency ?? (seed as any).is_emergency ?? null,
+        is_specialist: json.is_specialist ?? (seed as any).is_specialist ?? null
       } as NoteFacts;
       this.logger.log(`[AgenticRag][RagFactsService] final facts: ${JSON.stringify(facts)}`);
       return facts;
@@ -193,7 +246,10 @@ export class RagFactsService {
         referral_present: seed.referral_present ?? null,
         specialty: seed.specialty ?? null,
         age: (seed as any).age ?? null,
-        keywords: seed.keywords ?? []
+        keywords: seed.keywords ?? [],
+        is_gp: (seed as any).is_gp ?? null,
+        is_emergency: (seed as any).is_emergency ?? null,
+        is_specialist: (seed as any).is_specialist ?? null
       } as NoteFacts;
       this.logger.log(`[AgenticRag][RagFactsService] final facts: ${JSON.stringify(facts)}`);
       return facts;

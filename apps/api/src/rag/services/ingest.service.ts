@@ -1,9 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { CharacterTextSplitter } from 'langchain/text_splitter';
 import { RagInfraService } from './rag-infra.service';
 
 // Fallback lightweight Document type to avoid optional dependency in tests
-type Document = { pageContent: string; metadata?: any };
+type Document = { pageContent: string; metadata: any };
 
 @Injectable()
 export class RagIngestService {
@@ -27,9 +26,38 @@ export class RagIngestService {
 
     this.logger.log(`Processing ${data.length} items...`);
 
+    // Create one document per MBS item (item-level chunking)
     const docs: Document[] = data.map((item: any, idx: number) => {
       let content = '';
-      if (item.ItemNum) {
+      if (item.item_num) {
+        // New format with item_num
+        content = `MBS Item ${item.item_num}\n`;
+        content += `Description: ${item.description || ''}\n`;
+        content += `Category: ${item.category || ''}\n`;
+        content += `Group: ${item.group || ''}\n`;
+        if (item.subgroup) content += `Subgroup: ${item.subgroup}\n`;
+        if (item.subheading) content += `Subheading: ${item.subheading}\n`;
+        content += `Schedule Fee: ${item.schedule_fee || 'Not specified'}\n`;
+        if (item.derived_fee) content += `Derived Fee: ${item.derived_fee}\n`;
+        if (item.start_date) content += `Start Date: ${item.start_date}\n`;
+        if (item.end_date) content += `End Date: ${item.end_date}\n`;
+        if (item.duration_min_minutes !== null) {
+          content += `Duration: ${item.duration_min_minutes}`;
+          if (item.duration_max_minutes !== null) {
+            content += `-${item.duration_max_minutes}`;
+          }
+          content += ` minutes`;
+          if (item.duration_min_inclusive !== null) {
+            content += ` (min ${item.duration_min_inclusive ? 'inclusive' : 'exclusive'}`;
+            if (item.duration_max_inclusive !== null) {
+              content += `, max ${item.duration_max_inclusive ? 'inclusive' : 'exclusive'}`;
+            }
+            content += `)`;
+          }
+          content += `\n`;
+        }
+      } else if (item.ItemNum) {
+        // Old format with ItemNum
         content = `MBS Item ${item.ItemNum}\n`;
         content += `Description: ${item.Description || ''}\n`;
         content += `Category: ${item.Category || ''}\n`;
@@ -40,30 +68,48 @@ export class RagIngestService {
       } else {
         content = item.text || JSON.stringify(item);
       }
-      const metadata = { ...item, _id: item.ItemNum || item.id || String(idx), _type: 'mbs_item' };
+      
+      const metadata = { 
+        ...item, 
+        _id: item.item_num || item.ItemNum || item.id || String(idx), 
+        _type: 'mbs_item',
+        // Normalize field names for consistency
+        code: item.item_num || item.ItemNum,
+        description: item.description || item.Description,
+        fee: item.schedule_fee || item.ScheduleFee,
+        group: item.group || item.Group,
+        subgroup: item.subgroup || item.Subgroup,
+        subheading: item.subheading,
+        derived_fee: item.derived_fee,
+        duration_min_minutes: item.duration_min_minutes,
+        duration_max_minutes: item.duration_max_minutes,
+        duration_min_inclusive: item.duration_min_inclusive,
+        duration_max_inclusive: item.duration_max_inclusive,
+        start_date: item.start_date,
+        end_date: item.end_date
+      };
+      
       return { pageContent: content, metadata } as Document;
     });
 
-    this.logger.log(`Created ${docs.length} documents, starting embedding...`);
-    const splitter = new CharacterTextSplitter({ chunkSize: 2000, chunkOverlap: 100, separator: '\n' });
-    const chunks = await splitter.splitDocuments(docs as any);
-    this.logger.log(`Split into ${chunks.length} chunks, uploading to Pinecone...`);
+    this.logger.log(`Created ${docs.length} item-level documents, uploading to Pinecone...`);
 
     const batchSize = 100;
     let totalProcessed = 0;
     const pineconeIndex = this.infra.getPineconeIndex();
     const embeddings = this.infra.getEmbeddings();
-    for (let i = 0; i < chunks.length; i += batchSize) {
-      const batch = chunks.slice(i, i + batchSize);
+    
+    for (let i = 0; i < docs.length; i += batchSize) {
+      const batch = docs.slice(i, i + batchSize);
       const { PineconeStore } = await import('@langchain/pinecone');
       await PineconeStore.fromDocuments(batch, embeddings!, { pineconeIndex, namespace: 'default' });
       totalProcessed += batch.length;
-      this.logger.log(`Processed ${totalProcessed}/${chunks.length} chunks`);
+      this.logger.log(`Processed ${totalProcessed}/${docs.length} items`);
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    this.logger.log(`Ingestion complete: ${chunks.length} chunks stored in Pinecone`);
-    return { chunks: chunks.length };
+    this.logger.log(`Ingestion complete: ${docs.length} items stored in Pinecone`);
+    return { chunks: docs.length };
   }
 }
 

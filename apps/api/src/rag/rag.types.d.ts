@@ -19,6 +19,11 @@ export type NoteFacts = {
   specialty: string | null;
   age: number | null;
   keywords: string[];
+
+  // 新增三个识别点
+  is_gp: boolean | null;        // 是否由 GP 出诊
+  is_emergency: boolean | null; // 是否急诊（ED / Emergency Dept context）
+  is_specialist: boolean | null; // 是否专科医生出诊
 };
 
 export type Interval = { min: number | null; max: number | null; left_closed: boolean; right_closed: boolean };
@@ -39,6 +44,8 @@ export type ItemFlags = {
 
 export type ItemRule = {
   code: string;
+  group?: string; // Official MBS Group field
+  subgroup?: string; // Official MBS Subgroup field
   time_window?: Interval | null;
   age_range?: { min: number | null; max: number | null; left_closed?: boolean; right_closed?: boolean } | null;
   setting_allowed?: Array<"consulting_rooms" | "hospital" | "residential_care"> | null;
@@ -54,13 +61,18 @@ export type ItemRule = {
 
 export type VerifyCheckName =
   | "time_window" | "age" | "modality" | "setting" | "first_or_review" | "referral" | "specialty" | "conditions"
-  | "case_conference" | "usual_gp" | "home_only" | "referral_gp" | "referral_specialist";
+  | "case_conference" | "usual_gp" | "home_only" | "referral_gp" | "referral_specialist" | "keyword_refine"
+  | "is_gp" | "is_emergency" | "is_specialist";
+
+export type ItemCategory =
+  Array<'GP' | 'Imaging' | 'Specialist' | 'Surgery' | 'Pathology' | 'Emergency' | 'Telehealth' | 'AfterHours' | 'Other'>;
 
 export interface VerifyReport {
   item_code: string;
   passes: boolean;
   checks: { name: VerifyCheckName; pass: boolean; details?: string }[];
   rationale_markdown: string;
+  categories: ItemCategory;
 }
 
 export interface VerifiedItem {
@@ -69,6 +81,7 @@ export interface VerifiedItem {
   fee?: number | null;
   score: number | null;
   verify: VerifyReport;
+  group?: string | null;
 }
 
 export interface AgenticRagResult {
