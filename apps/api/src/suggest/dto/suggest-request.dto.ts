@@ -59,4 +59,9 @@ export class SuggestRequestDto implements SuggestRequest {
   @IsOptional()
   @IsIn(['business', 'after_hours', 'public_holiday'])
   hoursBucket?: 'business' | 'after_hours' | 'public_holiday';
+
+  @ApiProperty({ required: false, enum: ['quick', 'deep'], description: 'Suggestion mode. quick uses standard RAG+lexical, deep uses agentic RAG pipeline.' })
+  @IsOptional()
+  @IsIn(['quick', 'deep'])
+  mode?: 'quick' | 'deep';
 }

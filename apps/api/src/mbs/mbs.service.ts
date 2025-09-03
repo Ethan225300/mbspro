@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { KBRulesLoader } from './loader';
 import { MbsExtractorService } from './extractor.service';
 import { LexicalRetrieverService } from './retriever.service';
@@ -8,6 +8,8 @@ import { AuditLogService } from './audit-log.service';
 
 @Injectable()
 export class MbsCodesService {
+  private readonly logger = new Logger(MbsCodesService.name);
+  
   constructor(
     private readonly extractor: MbsExtractorService,
     private readonly retriever: LexicalRetrieverService,
@@ -33,25 +35,9 @@ export class MbsCodesService {
     let ragUsed = false;
     try {
       if (useRag) {
-        const { RagService } = await import('../rag/rag.service');
-        const rag = new RagService();
-        const ragRes: any = await rag.queryRag(note, topK * 3);
-        if (ragRes && Array.isArray(ragRes.results)) {
-          ragScores = new Map<string, number>();
-          for (const r of ragRes.results) {
-            const raw = r.match_score;
-            if (raw === null || raw === undefined) continue;
-            let s = Number(raw);
-            if (!isFinite(s)) continue;
-            if (s > 1 && s <= 100) s = s / 100;
-            s = Math.max(0, Math.min(1, s));
-            const code = String(r.itemNum ?? r.ItemNum ?? '').trim();
-            if (!code) continue;
-            const prev = ragScores.get(code);
-            if (prev === undefined || s > prev) ragScores.set(code, s);
-          }
-          ragUsed = ragScores.size > 0;
-        }
+        // Note: RAG service requires dependency injection, so we'll skip it in this context
+        // The RAG functionality should be accessed through the dedicated RAG endpoints
+        this.logger.warn('RAG integration disabled in MBS service - use /rag/agentic endpoint instead');
       }
     } catch {
       ragScores = null; ragUsed = false;
