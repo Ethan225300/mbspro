@@ -7,6 +7,9 @@ import { RagQueryService } from './services/query.service';
 import { RagFactsService } from './services/facts.service';
 import { RagVerifyService } from './services/verify.service';
 import { AgentGraphService } from './services/agent-graph.service';
+import { QueryReflectionService } from './services/query-reflection.service';
+import { RagRuleParserService } from './services/rule-parser.service';
+import { RetrievalReflectionService } from './services/retrieval-reflection.service';
 
 @Module({
   controllers: [RagController],
@@ -18,6 +21,9 @@ import { AgentGraphService } from './services/agent-graph.service';
     RagFactsService,
     RagVerifyService,
     AgentGraphService,
+    QueryReflectionService,
+    RagRuleParserService,
+    RetrievalReflectionService,
   ],
   exports: [RagService],
 })

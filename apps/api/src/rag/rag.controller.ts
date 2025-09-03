@@ -51,6 +51,26 @@ export class RagController {
     return { results };
   }
 
+  @Post('smart')
+  @HttpCode(HttpStatus.OK)
+  async smart(@Body() body: { note: string; top?: number }) {
+    this.logger.log(`[SmartRag] HTTP in: note_len=${(body?.note ?? '').length}, top=${body?.top}`);
+    const note = body?.note ?? '';
+    if (typeof note !== 'string' || !note.trim()) {
+      throw new BadRequestException('note is required and must be a non-empty string');
+    }
+    const top = Number(body?.top ?? 5);
+    const result = await this.rag.smartQueryRag(note, top);
+    const results = (result.items || []).map((item: any) => ({
+      itemNum: String(item.code ?? ''),
+      title: String(item.display ?? ''),
+      match_reason: String(item.match_reason ?? 'Enhanced by query reflection'),
+      match_score: item.score ?? null,
+      fee: item.fee ?? null,
+    }));
+    return { results, mode: 'smart' };
+  }
+
   @Post('clear')
   @HttpCode(HttpStatus.OK)
   async clear(@Body() body: { token?: string }) {
@@ -78,6 +98,41 @@ export class RagController {
   @HttpCode(HttpStatus.OK)
   status() {
     return this.rag.getStatus();
+  }
+
+  @Post('debug-smart')
+  @HttpCode(HttpStatus.OK)
+  async debugSmart(@Body() body: { note: string; top?: number }) {
+    this.logger.log(`[DebugSmart] Testing Smart mode with note: ${(body?.note ?? '').substring(0, 50)}...`);
+    
+    try {
+      const note = body?.note ?? '';
+      if (!note.trim()) {
+        return { error: 'Note is required' };
+      }
+      
+      const top = Number(body?.top ?? 3);
+      const result = await this.rag.smartQueryRag(note, top);
+      
+      return {
+        success: true,
+        mode: 'smart',
+        note: note.substring(0, 100),
+        itemCount: result?.items?.length || 0,
+        items: result?.items || [],
+        debug: {
+          note_facts: result?.note_facts,
+          iterations: result?.iterations,
+          reflection: result?.reflections
+        }
+      };
+    } catch (error) {
+      this.logger.error(`[DebugSmart] Error: ${error}`);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
   }
 }
 

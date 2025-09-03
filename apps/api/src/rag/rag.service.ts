@@ -22,6 +22,7 @@ export class RagService {
   ingestFromJsonFile(filename: string) { return this.ingestSvc.ingestFromJsonFile(filename); }
   queryRag(query: string, top = 5) { return this.querySvc.queryRag(query, top); }
   agenticQueryRag(note: string, top = 5): Promise<AgenticRagResult> { return this.agentGraph.agenticQueryRag(note, top); }
+  smartQueryRag(note: string, top = 5): Promise<AgenticRagResult> { return this.agentGraph.agenticQueryRag(note, top, { includeVerify: false }); }
 
   async clearVectorDatabase() { return this.infra.clearVectorDatabase(); }
 

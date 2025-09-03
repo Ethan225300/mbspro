@@ -89,5 +89,10 @@ export interface AgenticRagResult {
   items: VerifiedItem[];
   conflicts_resolved: string[];
   iterations: number;
+  reflections?: {
+    enhancedQuery: string;
+    insights: string[];
+    constraints: string[];
+  };
 }
 

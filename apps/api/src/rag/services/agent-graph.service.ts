@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { RagFactsService } from './facts.service';
 import { RagQueryService } from './query.service';
 import { RagVerifyService } from './verify.service';
+import { QueryReflectionService } from './query-reflection.service';
 import type { AgenticRagResult, NoteFacts, VerifiedItem } from '../rag.types';
 
 @Injectable()
@@ -12,6 +13,7 @@ export class AgentGraphService {
     private readonly facts: RagFactsService,
     private readonly query: RagQueryService,
     private readonly verify: RagVerifyService,
+    private readonly queryReflection: QueryReflectionService,
   ) {}
 
   buildRefineHints(facts: NoteFacts, failedCodes: string[]) {
@@ -79,26 +81,43 @@ export class AgentGraphService {
     return { items: passItems, conflicts_resolved: notes, failedCodes, softCodes, passedCodes, seenCodes } as { items: VerifiedItem[]; conflicts_resolved: string[]; failedCodes: string[]; softCodes: string[]; passedCodes: string[]; seenCodes: string[] };
   }
 
-  async agenticQueryRag(note: string, top: number = 5): Promise<AgenticRagResult> {
-    this.logger.log(`[AgenticRag] Service in: note_len=${(note ?? '').length}, top=${top}`);
+  async agenticQueryRag(note: string, top: number = 5, options: { includeVerify?: boolean } = {}): Promise<AgenticRagResult> {
+    const includeVerify = options.includeVerify !== false; // 默认为true，保持向后兼容
+    this.logger.log(`[AgenticRag] Service in: note_len=${(note ?? '').length}, top=${top}, mode=${includeVerify ? 'deep' : 'smart'}`);
+    
     try {
       try { await import('@langchain/langgraph'); } catch (e) { this.logger.warn(`[AgenticRag] LangGraph import failed: ${e instanceof Error ? e.stack : e}`); }
       const { Annotation, StateGraph, START, END } = await import('@langchain/langgraph');
-      const AgentState = (Annotation as any).Root({ note: (Annotation as any)(), topN: (Annotation as any)(), iterations: (Annotation as any)(), done: (Annotation as any)(), facts: (Annotation as any)(), proposal: (Annotation as any)(), vetted: (Annotation as any)(), refine: (Annotation as any)(), accepted: (Annotation as any)(), seenCodes: (Annotation as any)(), bannedCodes: (Annotation as any)(), });
+      const AgentState = (Annotation as any).Root({ note: (Annotation as any)(), topN: (Annotation as any)(), iterations: (Annotation as any)(), done: (Annotation as any)(), facts: (Annotation as any)(), proposal: (Annotation as any)(), vetted: (Annotation as any)(), refine: (Annotation as any)(), accepted: (Annotation as any)(), seenCodes: (Annotation as any)(), bannedCodes: (Annotation as any)(), enhancedQuery: (Annotation as any)(), reflectionInsights: (Annotation as any)(), reflectionConstraints: (Annotation as any)(), });
       const g = new StateGraph(AgentState as any);
       (g as any).addNode('extract_facts', async (s: any) => ({ facts: await this.facts.extractNoteFacts(s.note ?? '') }));
+      (g as any).addNode('query_reflection', async (s: any) => {
+        this.logger.log(`[AgenticRag][QueryReflection] Starting reflection on note: ${(s.note ?? '').substring(0, 50)}...`);
+        const reflection = await this.queryReflection.reflect(s.note ?? '', s.facts);
+        this.logger.log(`[AgenticRag][QueryReflection] Reflection complete - Score: ${reflection.completenessScore}, Enhanced: ${reflection.enhancedQuery !== (s.note ?? '')}`);
+        return { 
+          enhancedQuery: reflection.enhancedQuery,
+          reflectionInsights: reflection.reflectionInsights,
+          reflectionConstraints: Array.isArray(reflection.keyConstraints) ? reflection.keyConstraints : []
+        };
+      });
       (g as any).addNode('propose', async (s: any) => {
         const iteration = s.iterations ?? 0;
         const baseTop = Number(s.topN || 5);
         const k = (iteration === 0) ? baseTop + 3 : baseTop;
         this.logger.log(`[AgenticRag][AgentGraphService] Iteration ${iteration} - propose: topN=${k} (base=${baseTop})`);
-        const q = String(s.note || '');
+        // 使用增强后的查询而不是原始查询
+        const qBase = String(s.enhancedQuery || s.note || '');
+        const rc = Array.isArray(s.reflectionConstraints) ? (s.reflectionConstraints as any[]).map(String).filter(Boolean) : [];
+        const constraintLine = rc.length ? `#constraints\n${rc.map((c: string) => `+${c}`).join(' ')}` : '';
+        const q = constraintLine ? `${qBase}\n\n${constraintLine}` : qBase;
         const banned = Array.isArray(s.bannedCodes) ? s.bannedCodes.map(String) : [];
+        this.logger.log(`[AgenticRag][AgentGraphService] Using ${s.enhancedQuery ? 'enhanced' : 'original'} query for retrieval${rc.length ? ' with reflection constraints' : ''}`);
         const maxTries = 3;
         const seenSet = new Set<string>();
         let merged: any[] = [];
         for (let attempt = 0; attempt < maxTries; attempt++) {
-          const resp = await this.query.queryRag(q, k, { excludeCodes: banned });
+          const resp = await this.query.queryRag(q, k, { excludeCodes: banned, enableStage2Reflection: true, enableLLMReflection: true });
           const arr = Array.isArray(resp?.results) ? resp.results : [];
           for (const r of arr) {
             const code = String(r.itemNum ?? r.item_num ?? r.code ?? '');
@@ -164,8 +183,14 @@ export class AgentGraphService {
         const maxTries = 3;
         const seenSet = new Set<string>();
         let merged: any[] = [];
+        // 合并反思产生的约束到 refine.must 中
+        const rc = Array.isArray(s.reflectionConstraints) ? (s.reflectionConstraints as any[]).map(String).filter(Boolean) : [];
+        const refineMerged = {
+          must: [ ...(s.refine?.must ?? []), ...rc ],
+          must_not: [ ...(s.refine?.must_not ?? []) ],
+        };
         for (let attempt = 0; attempt < maxTries; attempt++) {
-          const resp = await this.queryRagWithConstraints(s.note ?? '', s.refine, k, { excludeCodes: banned });
+          const resp = await this.queryRagWithConstraints(s.enhancedQuery ?? s.note ?? '', refineMerged, k, { excludeCodes: banned });
           const arr = Array.isArray(resp?.results) ? resp.results : [];
           for (const r of arr) {
             const code = String(r.itemNum ?? r.item_num ?? r.code ?? '');
@@ -185,24 +210,80 @@ export class AgentGraphService {
         this.logger.log(`[AgenticRag][AgentGraphService] propose: out results=${count}`);
         return { proposal: { ok: true, results: merged }, iterations: iteration };
       });
+      // 基础流程：所有模式都包含
       (g as any).addEdge(START, 'extract_facts');
-      (g as any).addEdge('extract_facts', 'propose');
-      (g as any).addEdge('propose', 'verify');
-      (g as any).addConditionalEdges('verify', (s: any) => {
-        const maxIterationsReached = (s.iterations ?? 0) >= 2;
-        if (maxIterationsReached) {
-          this.logger.log(`[AgenticRag] stop: reached max iterations=${s.iterations}`);
-        }
-        return ((s.done || maxIterationsReached) ? 'end' : 'critic');
-      }, { end: END, critic: 'critic' } as any);
-      (g as any).addEdge('critic', 'refine_propose');
-      (g as any).addEdge('refine_propose', 'verify');
+      (g as any).addEdge('extract_facts', 'query_reflection');
+      
+      if (includeVerify) {
+        // Deep模式：包含完整的验证和迭代流程
+        (g as any).addEdge('query_reflection', 'propose');
+        (g as any).addEdge('propose', 'verify');
+        (g as any).addConditionalEdges('verify', (s: any) => {
+          const maxIterationsReached = (s.iterations ?? 0) >= 2;
+          if (maxIterationsReached) {
+            this.logger.log(`[AgenticRag] stop: reached max iterations=${s.iterations}`);
+          }
+          return ((s.done || maxIterationsReached) ? 'end' : 'critic');
+        }, { end: END, critic: 'critic' } as any);
+        (g as any).addEdge('critic', 'refine_propose');
+        (g as any).addEdge('refine_propose', 'verify');
+      } else {
+        // Smart模式：只包含查询增强，直接输出proposal结果
+        (g as any).addNode('smart_propose', async (s: any) => {
+          const baseTop = Number(s.topN || 5);
+          this.logger.log(`[AgenticRag][Smart] propose: topN=${baseTop}`);
+          const q = String(s.enhancedQuery || s.note || '');
+          const resp = await this.query.queryRag(q, baseTop, { enableStage2Reflection: true, enableLLMReflection: true });
+          const results = Array.isArray(resp?.results) ? resp.results : [];
+          
+          // 转换为与Deep模式一致的格式，但不包含验证信息
+          const items = results.map((r: any) => ({
+            code: String(r.itemNum ?? r.item_num ?? r.code ?? ''),
+            display: r.title ?? r.desc ?? '',
+            description: r.description ?? r.title ?? r.desc ?? '',
+            fee: r.fee ?? null,
+            score: r.match_score ?? null,
+            match_reason: r.match_reason ?? 'Enhanced by query self-reflection',
+            verify: null // Smart模式不包含验证
+          }));
+          
+          this.logger.log(`[AgenticRag][Smart] propose: out results=${items.length}`);
+          return { 
+            accepted: items,
+            done: true,
+            iterations: 0
+          };
+        });
+        (g as any).addEdge('query_reflection', 'smart_propose');
+        (g as any).addEdge('smart_propose', END);
+      }
       const graph = (g as any).compile();
       const initialTop = Math.min(Math.max(top ?? 5, 1), 10);
       const initialNote = String(note ?? '');
-      const out = await graph.invoke({ note: initialNote, topN: initialTop, iterations: 0, done: false, bannedCodes: [], seenCodes: [] });
+      const out = await graph.invoke({ 
+        note: initialNote, 
+        topN: initialTop, 
+        iterations: 0, 
+        done: false, 
+        bannedCodes: [], 
+        seenCodes: [],
+        enhancedQuery: initialNote,  // 初始化为原始查询
+        reflectionInsights: [],
+        reflectionConstraints: []
+      });
       const accepted = Array.isArray((out as any).accepted) ? (out as any).accepted : [];
-      return { note_facts: out.facts!, items: accepted.slice(0, initialTop), conflicts_resolved: out.vetted?.conflicts_resolved ?? [], iterations: out.iterations ?? 1 } as AgenticRagResult;
+      return { 
+        note_facts: out.facts!, 
+        items: accepted.slice(0, initialTop), 
+        conflicts_resolved: out.vetted?.conflicts_resolved ?? [], 
+        iterations: out.iterations ?? 1,
+        // 新增：返回反思细节，便于上层调试/观测
+        reflections: {
+          enhancedQuery: String(out.enhancedQuery ?? initialNote),
+          insights: Array.isArray(out.reflectionInsights) ? out.reflectionInsights : [],
+          constraints: Array.isArray(out.reflectionConstraints) ? out.reflectionConstraints : [],
+        }
+      } as AgenticRagResult;
     } catch (e) {
       const initialTop = Math.min(Math.max(top ?? 5, 1), 10);
       const initialNote = String(note ?? '');

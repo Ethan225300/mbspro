@@ -30,16 +30,48 @@ export class SuggestService {
     const started = Date.now();
     const note = request.note || "";
     const topN = request.topN && request.topN > 0 ? request.topN : 5;
-    const mode = (request as any).mode === 'deep' ? 'deep' : 'quick';
+    const mode = ['quick', 'smart', 'deep'].includes((request as any).mode) ? (request as any).mode : 'quick';
 
     try {
       const signalsInternal = this.signalExtractor.extract(note);
       const topK = Math.max(30, topN * 10);
 
-      // Retrieval stage: quick uses standard queryRag, deep uses agenticQueryRag
+      // Retrieval stage: 3-mode routing
       let rows: any[] = [];
       try {
-        if (mode === 'deep') {
+        this.logger.log(`[SuggestService] Using ${mode} mode for retrieval`);
+        
+        if (mode === 'quick') {
+          // Quick模式：基础RAG，无自反思，无验证
+          const rag = await this.rag.queryRag(note, Math.min(topN + 3, 15));
+          if (rag && Array.isArray((rag as any).results)) {
+            rows = (rag as any).results.map((r: any) => ({
+              code: r.itemNum || (Array.isArray(r.itemNums) ? r.itemNums[0] || "" : ""),
+              title: r.title || "",
+              description: r.description || "",
+              match_reason: r.match_reason || "",
+              fee: r.fee ? parseFloat(String(r.fee).replace(/[^0-9.]/g, "")) : 0,
+              flags: {},
+              time_threshold: undefined,
+              bm25: typeof r.match_score === "number" ? r.match_score > 1 && r.match_score <= 100 ? Math.max(0, Math.min(1, r.match_score / 100)) : Math.max(0, Math.min(1, r.match_score)) : 0,
+            }));
+          }
+        } else if (mode === 'smart') {
+          // Smart模式：包含查询自反思，无规则验证
+          const result = await this.rag.smartQueryRag(note, Math.min(topN + 3, 15));
+          const items = Array.isArray((result as any)?.items) ? (result as any).items : [];
+          rows = items.map((it: any) => ({
+            code: String(it.code || it.itemNum || ''),
+            title: String(it.display || it.title || ''),
+            description: String(it.description || ''),
+            match_reason: String(it.match_reason || 'Enhanced by query self-reflection'),
+            fee: it.fee ? parseFloat(String(it.fee).replace(/[^0-9.]/g, '')) : 0,
+            flags: {},
+            time_threshold: undefined,
+            bm25: typeof it.score === 'number' ? Math.max(0, Math.min(1, it.score)) : 0,
+          }));
+        } else if (mode === 'deep') {
+          // Deep模式：完整流程，包含查询自反思和规则验证
           const result = await this.rag.agenticQueryRag(note, Math.min(topN + 3, 15));
           const items = Array.isArray((result as any)?.items) ? (result as any).items : [];
           rows = items.map((it: any) => ({
@@ -52,27 +84,6 @@ export class SuggestService {
             time_threshold: undefined,
             bm25: typeof it.score === 'number' ? Math.max(0, Math.min(1, it.score)) : 0,
           }));
-        } else {
-          const rag = await this.rag.queryRag(note, Math.min(topN + 3, 15));
-          if (rag && Array.isArray((rag as any).results)) {
-            rows = (rag as any).results.map((r: any) => ({
-              code:
-                r.itemNum ||
-                (Array.isArray(r.itemNums) ? r.itemNums[0] || "" : ""),
-              title: r.title || "",
-              description: r.description || "",
-              match_reason: r.match_reason || "",
-              fee: r.fee ? parseFloat(String(r.fee).replace(/[^0-9.]/g, "")) : 0,
-              flags: {},
-              time_threshold: undefined,
-              bm25:
-                typeof r.match_score === "number"
-                  ? r.match_score > 1 && r.match_score <= 100
-                    ? Math.max(0, Math.min(1, r.match_score / 100))
-                    : Math.max(0, Math.min(1, r.match_score))
-                  : 0,
-            }));
-          }
         }
       } catch (e) {
         this.logger.warn(`RAG ${mode} query failed: ${String(e)}`);
@@ -120,8 +131,17 @@ export class SuggestService {
         const original = rowsForRanker.find(
           (r) => String(r.code) === String(c.code)
         );
-        const { ruleResults, compliance, blocked, penalties, warnings } =
-          this.rules.evaluate({
+        
+        // 根据模式决定是否执行Rule Engine验证
+        let ruleResults: any[] = [];
+        let compliance = 'green';
+        let blocked = false;
+        let penalties = 0;
+        let warnings: any[] = [];
+        
+        if (mode === 'deep') {
+          // 只有Deep模式执行完整的规则验证
+          const ruleEvaluation = this.rules.evaluate({
             note: {
               mode: signalsInternal.mode,
               after_hours: signalsInternal.afterHours,
@@ -153,6 +173,20 @@ export class SuggestService {
               now_iso: new Date().toISOString(),
             },
           });
+          
+          ruleResults = ruleEvaluation.ruleResults;
+          compliance = ruleEvaluation.compliance;
+          blocked = ruleEvaluation.blocked;
+          penalties = ruleEvaluation.penalties;
+          warnings = ruleEvaluation.warnings;
+        } else {
+          // Quick和Smart模式：跳过规则验证，使用默认值
+          ruleResults = [];
+          compliance = 'green';
+          blocked = false;
+          penalties = 0;
+          warnings = [];
+        }
         // Add fee to feature_hits
         const featureHits = [...(c.feature_hits || [])];
         if (original?.fee && original.fee > 0) {
@@ -216,8 +250,9 @@ export class SuggestService {
         // - Reduced hard penalties for better score distribution
         // - Optimized evidence sufficiency baseline
         // - Better balance between rules and base similarity
-        const anyFail = ruleResults.some((r) => r.status === "fail");
-        const warnCount = ruleResults.filter((r) => r.status === "warn").length;
+        // - Mode-aware calculation (quick/smart modes have higher baseline confidence)
+        const anyFail = ruleResults.length > 0 ? ruleResults.some((r) => r.status === "fail") : false;
+        const warnCount = ruleResults.length > 0 ? ruleResults.filter((r) => r.status === "warn").length : 0;
         const softTotal = warnCount + (anyFail ? 1 : 0);
         const sRuleSoft =
           softTotal > 0 ? Math.max(0, 1 - Math.min(0.4, warnCount * 0.1)) : 1;
@@ -249,11 +284,19 @@ export class SuggestService {
           );
         }
 
-        // Softer heuristics
+        // Softer heuristics with mode-aware scoring
         let score = Math.max(0, Math.min(1, baseSim + marginBonus));
-        // Hard cap only when clearly blocked; otherwise a softer cap
-        if (blocked) score = Math.min(score, 0.25);
-        else if (anyFail) score = Math.min(score, 0.5);
+        
+        // 根据模式调整评分策略
+        if (mode === 'deep') {
+          // Deep模式：严格的规则验证惩罚
+          if (blocked) score = Math.min(score, 0.25);
+          else if (anyFail) score = Math.min(score, 0.5);
+        } else {
+          // Quick和Smart模式：较宽松的评分，因为没有严格的规则验证
+          // 给予基础的置信度提升，因为没有规则验证的惩罚
+          score = Math.min(1.0, score * 1.1); // 10%的置信度提升
+        }
         // gentler warn decay and higher evidence baseline
         const warnDecay = Number.isFinite(
           Number(process.env.SUGGEST_WARN_DECAY)

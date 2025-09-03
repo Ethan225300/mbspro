@@ -86,7 +86,8 @@ export default function SuggestionsPage() {
   const [selectionBlocked, setSelectionBlocked] = useState(false);
   const [selectionWarnings, setSelectionWarnings] = useState<string[]>([]);
   const [hasClearedNotes, setHasClearedNotes] = useState(false);
-  const [suggestMode, setSuggestMode] = useState<'quick'|'deep'>('quick');
+  const [suggestMode, setSuggestMode] = useState<'quick'|'smart'|'deep'>('quick');
+  const [lastRequestTime, setLastRequestTime] = useState<number | null>(null);
   
   // Use shared patient selection store
   const { selectedPatient, setSelectedPatient } = usePatientSelection();
@@ -307,9 +308,19 @@ A: Chest pain, likely musculoskeletal. Rule out cardiac causes.
 P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if symptoms persist.`;
 
   const handleGetSuggestions = async () => {
+    console.log('🔥 handleGetSuggestions called with mode:', suggestMode);
+    console.log('📝 SOAP Notes:', soapNotes.substring(0, 100));
+    
+    if (!soapNotes.trim()) {
+      setError("Please enter clinical notes before getting suggestions");
+      return;
+    }
+    
+    const startTime = Date.now();
     setIsLoading(true);
     setError("");
     setShowSuggestions(false);
+    setLastRequestTime(null);
 
     try {
       const apiBase = (
@@ -331,41 +342,45 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
         requestBody.hoursBucket = selectedPatient.hours_bucket;
       }
 
-      if (suggestMode === 'deep') {
-        const response = await fetch(`${apiBase}/api/suggest`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...requestBody, mode: 'deep' }),
-        });
-        if (!response.ok) throw new Error(`API responded with status: ${response.status}`);
-        const data: SuggestResponse = await response.json();
-        setSuggestions((data.candidates as any) || []);
-        try { (window as any).__suggestVisible = (data.candidates || []).map((c:any)=>String(c.code)); } catch {}
-        setCandidates((data.candidates as any) || []);
-        setShowSuggestions(true);
-      } else {
-        const response = await fetch(`${apiBase}/api/suggest`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ ...requestBody, mode: 'quick' }),
-        });
-        if (!response.ok) {
-          throw new Error(`API responded with status: ${response.status}`);
-        }
-        const data: SuggestResponse = await response.json();
-        setSuggestions(data.candidates || []);
-        // expose visible suggestion codes globally for SwapPanel filtering
-        try { (window as any).__suggestVisible = (data.candidates || []).map((c:any)=>String(c.code)); } catch {}
-        setCandidates((data.candidates as any) || []);
-        setShowSuggestions(true);
+      // Unified API call with mode parameter
+      console.log('🚀 Making API call to:', `${apiBase}/api/suggest`);
+      console.log('📦 Request body:', { ...requestBody, mode: suggestMode });
+      
+      const response = await fetch(`${apiBase}/api/suggest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...requestBody, mode: suggestMode }),
+      });
+      
+      console.log('📡 Response status:', response.status);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ API Error Response:', errorText);
+        throw new Error(`API responded with status: ${response.status} - ${errorText}`);
       }
+      
+      const data: SuggestResponse = await response.json();
+      console.log('✅ API Response data:', {
+        candidatesCount: data.candidates?.length || 0,
+        hasSignals: !!data.signals,
+        sampleCandidate: data.candidates?.[0]
+      });
+      
+      setSuggestions(data.candidates || []);
+      // expose visible suggestion codes globally for SwapPanel filtering
+      try { (window as any).__suggestVisible = (data.candidates || []).map((c:any)=>String(c.code)); } catch {}
+      setCandidates((data.candidates as any) || []);
+      setShowSuggestions(true);
+      setLastRequestTime(Date.now() - startTime);
+      
+      console.log('🎉 Suggestions updated successfully');
     } catch (err: any) {
-      console.error("Error getting suggestions:", err);
+      console.error("❌ Error getting suggestions:", err);
       setError(err.message || "Failed to fetch suggestions");
     } finally {
       setIsLoading(false);
+      console.log('🏁 Request completed');
     }
   };
 
@@ -458,6 +473,28 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
                 </div>
               )}
 
+              {/* Mode Description */}
+              <div className="mt-3 p-3 bg-gray-50 rounded-lg text-xs text-gray-600">
+                {suggestMode === 'quick' && (
+                  <div className="flex items-start space-x-2">
+                    <span className="text-blue-500">ℹ️</span>
+                    <span><strong>Quick Mode:</strong> Basic vector search + LLM filtering. Fast results (~300ms). No query enhancement or rule validation.</span>
+                  </div>
+                )}
+                {suggestMode === 'smart' && (
+                  <div className="flex items-start space-x-2">
+                    <span className="text-green-500">✨</span>
+                    <span><strong>Smart Mode:</strong> Query self-reflection + enhanced search. Improved accuracy (~1s). No rule validation for faster results.</span>
+                  </div>
+                )}
+                {suggestMode === 'deep' && (
+                  <div className="flex items-start space-x-2">
+                    <span className="text-purple-500">🔬</span>
+                    <span><strong>Deep Mode:</strong> Full query enhancement + rule validation + iterative refinement. Maximum accuracy (~2s). Complete compliance checking.</span>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center justify-between mt-4">
                 <div className="flex items-center space-x-4 text-sm text-gray-500">
                   <span>Characters: {soapNotes.length}</span>
@@ -470,16 +507,23 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <select
-                    value={suggestMode}
-                    onChange={(e) => setSuggestMode(e.target.value as any)}
-                    className="px-2 py-2 border border-gray-300 rounded-md text-sm"
-                  >
-                    <option value="quick">Quick</option>
-                    <option value="deep">Deep</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={suggestMode}
+                      onChange={(e) => setSuggestMode(e.target.value as any)}
+                      className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                    >
+                      <option value="quick">🚀 Quick - Basic RAG</option>
+                      <option value="smart">🧠 Smart - Self Reflection</option>
+                      <option value="deep">🔬 Deep - Full Validation</option>
+                    </select>
+                  </div>
                   <button
-                    onClick={handleGetSuggestions}
+                    onClick={(e) => {
+                      console.log('🔘 Button clicked!', { isLoading, soapNotes: soapNotes.length, mode: suggestMode });
+                      e.preventDefault();
+                      handleGetSuggestions();
+                    }}
                     disabled={isLoading}
                     className="btn-primary flex items-center disabled:opacity-50"
                   >
@@ -509,7 +553,8 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
                         Analyzing...
                       </div>
                     ) : (
-                      suggestMode === 'deep' ? 'Get Deep Suggestions' : 'Get AI Suggestions'
+                      suggestMode === 'deep' ? 'Get Deep Suggestions' : 
+                      suggestMode === 'smart' ? 'Get Smart Suggestions' : 'Get AI Suggestions'
                     )}
                   </button>
                 </div>
@@ -520,12 +565,30 @@ P: Order ECG, chest X-ray. Prescribe anti-inflammatory. Follow up in 1 week if s
             {showSuggestions && (
               <div className="card">
                 <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-lg font-semibold text-gray-900">
-                    MBS Code Suggestions
-                  </h2>
+                  <div className="flex items-center space-x-3">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      MBS Code Suggestions
+                    </h2>
+                    <div className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      suggestMode === 'quick' ? 'bg-blue-100 text-blue-800' :
+                      suggestMode === 'smart' ? 'bg-green-100 text-green-800' :
+                      'bg-purple-100 text-purple-800'
+                    }`}>
+                      {suggestMode === 'quick' ? '🚀 Quick' :
+                       suggestMode === 'smart' ? '🧠 Smart' : '🔬 Deep'}
+                    </div>
+                  </div>
                   <div className="flex items-center space-x-2 text-sm text-gray-500">
                     <SparklesIcon className="h-4 w-4" />
-                    <span>AI Confidence: 89%</span>
+                    <span>
+                      {suggestMode === 'deep' ? 'Validated Results' :
+                       suggestMode === 'smart' ? 'Self-Reflected Results' : 'Quick Results'}
+                      {lastRequestTime && (
+                        <span className="ml-2 text-xs">
+                          ({lastRequestTime}ms)
+                        </span>
+                      )}
+                    </span>
                   </div>
                 </div>
 
