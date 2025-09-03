@@ -67,6 +67,19 @@ export class RagInfraService {
   getCohere() { return this.cohere; }
   getPineconeIndex() { return this.pineconeIndex; }
   getEmbeddings() { return this.embeddings; }
+
+  // Maintenance operations for the vector database
+  async clearVectorDatabase() {
+    await this.initIfNeeded();
+    const pineconeIndex = this.getPineconeIndex();
+    if (!pineconeIndex) {
+      throw new Error('Pinecone not configured');
+    }
+    this.logger.log('Clearing all vectors from Pinecone database...');
+    await pineconeIndex.namespace('default').deleteAll();
+    this.logger.log('Successfully cleared all vectors from the database');
+    return { message: 'Database cleared successfully' };
+  }
 }
 
 
