@@ -132,61 +132,44 @@ export class SuggestService {
           (r) => String(r.code) === String(c.code)
         );
         
-        // 根据模式决定是否执行Rule Engine验证
-        let ruleResults: any[] = [];
-        let compliance = 'green';
-        let blocked = false;
-        let penalties = 0;
-        let warnings: any[] = [];
-        
-        if (mode === 'deep') {
-          // 只有Deep模式执行完整的规则验证
-          const ruleEvaluation = this.rules.evaluate({
-            note: {
-              mode: signalsInternal.mode,
-              after_hours: signalsInternal.afterHours,
-              chronic: signalsInternal.chronic,
-              duration: signalsInternal.duration,
-              keywords: signalsInternal.keywords,
-            },
-            item: {
-              code: c.code,
-              time_threshold: original?.time_threshold,
-              flags: original?.flags || {},
-              mutually_exclusive_with: original?.mutually_exclusive_with || [],
-            },
-            context: {
-              selected_codes: Array.isArray((request as any).selectedCodes)
-                ? (request as any).selectedCodes.map(String)
-                : [],
-              last_claimed_items: Array.isArray(
-                (request as any).lastClaimedItems
-              )
-                ? (request as any).lastClaimedItems
-                : [],
-              provider_type: (request as any).providerType,
-              location: (request as any).location,
-              referral_present: (request as any).referralPresent,
-              hours_bucket: (request as any).hoursBucket,
-              consult_start: (request as any).consultStart,
-              consult_end: (request as any).consultEnd,
-              now_iso: new Date().toISOString(),
-            },
-          });
-          
-          ruleResults = ruleEvaluation.ruleResults;
-          compliance = ruleEvaluation.compliance;
-          blocked = ruleEvaluation.blocked;
-          penalties = ruleEvaluation.penalties;
-          warnings = ruleEvaluation.warnings;
-        } else {
-          // Quick和Smart模式：跳过规则验证，使用默认值
-          ruleResults = [];
-          compliance = 'green';
-          blocked = false;
-          penalties = 0;
-          warnings = [];
-        }
+        // 所有模式都执行 Rule Engine 验证；Deep 还会在上游通过 rule-parser/verify 做筛选/再检索
+        const ruleEvaluation = this.rules.evaluate({
+          note: {
+            mode: signalsInternal.mode,
+            after_hours: signalsInternal.afterHours,
+            chronic: signalsInternal.chronic,
+            duration: signalsInternal.duration,
+            keywords: signalsInternal.keywords,
+          },
+          item: {
+            code: c.code,
+            time_threshold: original?.time_threshold,
+            flags: original?.flags || {},
+            mutually_exclusive_with: original?.mutually_exclusive_with || [],
+          },
+          context: {
+            selected_codes: Array.isArray((request as any).selectedCodes)
+              ? (request as any).selectedCodes.map(String)
+              : [],
+            last_claimed_items: Array.isArray(
+              (request as any).lastClaimedItems
+            )
+              ? (request as any).lastClaimedItems
+              : [],
+            provider_type: (request as any).providerType,
+            location: (request as any).location,
+            referral_present: (request as any).referralPresent,
+            hours_bucket: (request as any).hoursBucket,
+            consult_start: (request as any).consultStart,
+            consult_end: (request as any).consultEnd,
+            now_iso: new Date().toISOString(),
+          },
+        });
+        const ruleResults: any[] = ruleEvaluation.ruleResults;
+        const compliance = ruleEvaluation.compliance;
+        const blocked = ruleEvaluation.blocked;
+        const penalties = ruleEvaluation.penalties;
+        const warnings: any[] = ruleEvaluation.warnings;
         // Add fee to feature_hits
         const featureHits = [...(c.feature_hits || [])];
         if (original?.fee && original.fee > 0) {
